@@ -19,10 +19,77 @@ let wakeLock = null;
 let monitor = null;
 let running = false;
 
+// Кэш в браузере: при следующих открытиях модель и библиотека берутся с телефона
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch((error) => console.warn("sw.js:", error));
+}
+
 function setStatus(result) {
   statusEl.textContent = result.text;
   statusEl.className = result.cls;
   if (result.cls === "danger" && navigator.vibrate) navigator.vibrate(200);
+}
+
+function setLoading(text) {
+  statusEl.textContent = text;
+  statusEl.className = "calib";
+}
+
+// Ждём не дольше seconds секунд, иначе показываем ошибку вместо вечной загрузки
+function withTimeout(promise, seconds, what) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what}: нет ответа за ${seconds} с`)), seconds * 1000);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+// Скачивает файл и показывает процент, чтобы было видно, что загрузка идёт
+async function fetchWithProgress(url, label) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`${label}: HTTP ${response.status}`);
+  const total = Number(response.headers.get("content-length")) || 0;
+  const reader = response.body.getReader();
+  const chunks = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    if (total) setLoading(`${label}: ${Math.round((received / total) * 100)}%`);
+  }
+  const data = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    data.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return data;
+}
+
+// Модель грузится сразу при открытии страницы, к нажатию «Старт» она уже готова
+let landmarkerPromise = null;
+function preloadLandmarker() {
+  if (!landmarkerPromise) {
+    landmarkerPromise = (async () => {
+      setLoading("Загрузка библиотеки…");
+      const vision = await withTimeout(FilesetResolver.forVisionTasks(WASM_URL), 60, "библиотека");
+      const modelBuffer = await withTimeout(fetchWithProgress(MODEL_URL, "Модель"), 120, "модель");
+      setLoading("Готовим распознавание…");
+      // Процессор работает на всех телефонах надёжно, GPU на части iPhone зависает
+      return FaceLandmarker.createFromOptions(vision, {
+        baseOptions: { modelAssetBuffer: modelBuffer, delegate: "CPU" },
+        runningMode: "VIDEO",
+        numFaces: 1,
+      });
+    })();
+    // Если загрузка не удалась, при нажатии «Старт» попробуем снова
+    landmarkerPromise.catch(() => {
+      landmarkerPromise = null;
+    });
+  }
+  return landmarkerPromise;
 }
 
 async function initAudio() {
@@ -68,36 +135,6 @@ async function keepScreenOn() {
   }
 }
 
-// Ждём не дольше seconds секунд, иначе показываем ошибку вместо вечной загрузки
-function withTimeout(promise, seconds, what) {
-  let timer;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${what}: нет ответа за ${seconds} с`)), seconds * 1000);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
-function setLoading(text) {
-  statusEl.textContent = text;
-  statusEl.className = "calib";
-}
-
-async function createLandmarker() {
-  setLoading("Шаг 2/3: загрузка распознавания лица…");
-  const vision = await withTimeout(FilesetResolver.forVisionTasks(WASM_URL), 60, "загрузка библиотеки");
-  setLoading("Шаг 3/3: загрузка модели лица (около 4 МБ)…");
-  // Процессор работает на всех телефонах надёжно, GPU на части iPhone зависает
-  return await withTimeout(
-    FaceLandmarker.createFromOptions(vision, {
-      baseOptions: { modelAssetPath: MODEL_URL, delegate: "CPU" },
-      runningMode: "VIDEO",
-      numFaces: 1,
-    }),
-    90,
-    "загрузка модели"
-  );
-}
-
 function tick() {
   if (!running) return;
   if (video.readyState >= 2) {
@@ -119,7 +156,7 @@ function tick() {
 
 async function start() {
   startBtn.disabled = true;
-  setLoading("Шаг 1/3: камера и звук…");
+  setLoading("Камера и звук…");
   try {
     // Звук нужно запускать по нажатию (ограничение телефонов)
     await initAudio();
@@ -130,7 +167,8 @@ async function start() {
     video.srcObject = stream;
     await video.play();
 
-    landmarker = await createLandmarker();
+    // Если модель уже загрузилась при открытии страницы, это мгновенно
+    landmarker = await preloadLandmarker();
     setLoading("Готово, смотрите в камеру…");
 
     monitor = new DrowsinessMonitor({
@@ -169,3 +207,14 @@ stopBtn.addEventListener("click", stop);
 document.addEventListener("visibilitychange", () => {
   if (running && document.visibilityState === "visible") keepScreenOn();
 });
+
+// Старт загрузки модели сразу при открытии страницы
+preloadLandmarker()
+  .then(() => {
+    // Не перебиваем статус, если пользователь уже нажал «Старт»
+    if (!startBtn.disabled) setLoading("Готово: нажмите «Старт»");
+  })
+  .catch((error) => {
+    statusEl.textContent = "Загрузка не удалась, нажмите «Старт» для повтора: " + error.message;
+    statusEl.className = "danger";
+  });
