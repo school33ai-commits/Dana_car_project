@@ -68,19 +68,34 @@ async function keepScreenOn() {
   }
 }
 
-async function createLandmarker() {
-  const vision = await FilesetResolver.forVisionTasks(WASM_URL);
-  const options = (delegate) => ({
-    baseOptions: { modelAssetPath: MODEL_URL, delegate },
-    runningMode: "VIDEO",
-    numFaces: 1,
+// Ждём не дольше seconds секунд, иначе показываем ошибку вместо вечной загрузки
+function withTimeout(promise, seconds, what) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what}: нет ответа за ${seconds} с`)), seconds * 1000);
   });
-  try {
-    return await FaceLandmarker.createFromOptions(vision, options("GPU"));
-  } catch (error) {
-    // На некоторых телефонах GPU недоступен — переходим на процессор
-    return await FaceLandmarker.createFromOptions(vision, options("CPU"));
-  }
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+function setLoading(text) {
+  statusEl.textContent = text;
+  statusEl.className = "calib";
+}
+
+async function createLandmarker() {
+  setLoading("Шаг 2/3: загрузка распознавания лица…");
+  const vision = await withTimeout(FilesetResolver.forVisionTasks(WASM_URL), 60, "загрузка библиотеки");
+  setLoading("Шаг 3/3: загрузка модели лица (около 4 МБ)…");
+  // Процессор работает на всех телефонах надёжно, GPU на части iPhone зависает
+  return await withTimeout(
+    FaceLandmarker.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: MODEL_URL, delegate: "CPU" },
+      runningMode: "VIDEO",
+      numFaces: 1,
+    }),
+    90,
+    "загрузка модели"
+  );
 }
 
 function tick() {
@@ -104,8 +119,7 @@ function tick() {
 
 async function start() {
   startBtn.disabled = true;
-  statusEl.textContent = "Загрузка…";
-  statusEl.className = "calib";
+  setLoading("Шаг 1/3: камера и звук…");
   try {
     // Звук нужно запускать по нажатию (ограничение телефонов)
     await initAudio();
@@ -117,6 +131,7 @@ async function start() {
     await video.play();
 
     landmarker = await createLandmarker();
+    setLoading("Готово, смотрите в камеру…");
 
     monitor = new DrowsinessMonitor({
       calibSeconds: 5,
