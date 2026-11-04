@@ -10,6 +10,69 @@ const statusEl = document.getElementById("status");
 const infoEl = document.getElementById("info");
 const startBtn = document.getElementById("start");
 const stopBtn = document.getElementById("stop");
+const driverInput = document.getElementById("driver");
+const logCountEl = document.getElementById("logCount");
+const exportBtn = document.getElementById("export");
+const clearBtn = document.getElementById("clear");
+
+// Журнал засыпаний хранится в памяти телефона, по одной записи на каждое засыпание
+const LOG_KEY = "dana_alarm_log";
+
+function loadLog() {
+  try {
+    return JSON.parse(localStorage.getItem(LOG_KEY)) || [];
+  } catch (error) {
+    return [];
+  }
+}
+
+function saveLog(log) {
+  localStorage.setItem(LOG_KEY, JSON.stringify(log));
+  logCountEl.textContent = `Записей о засыпании: ${log.length}`;
+}
+
+function onAlarmStart(ear) {
+  const log = loadLog();
+  log.push({
+    start: new Date().toISOString(),
+    end: "",
+    driver: driverInput.value.trim(),
+    eyesClosedSeconds: "",
+    ear: ear.toFixed(2),
+  });
+  saveLog(log);
+}
+
+function onAlarmEnd(duration) {
+  const log = loadLog();
+  const last = log[log.length - 1];
+  if (last && !last.end) {
+    last.end = new Date().toISOString();
+    last.eyesClosedSeconds = duration.toFixed(1);
+    saveLog(log);
+  }
+}
+
+function exportLog() {
+  const log = loadLog();
+  const quote = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+  const header = ["начало", "конец", "водитель", "закрыты_сек", "EAR"];
+  const rows = log.map((r) => [r.start, r.end, r.driver, r.eyesClosedSeconds, r.ear].map(quote).join(","));
+  // ﻿ — метка UTF-8, чтобы Excel правильно показал русские буквы
+  const csv = "﻿" + [header.join(","), ...rows].join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `dana_log_${new Date().toISOString().slice(0, 10)}.csv`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+}
+
+exportBtn.addEventListener("click", exportLog);
+clearBtn.addEventListener("click", () => {
+  if (confirm("Очистить журнал на этом телефоне?")) saveLog([]);
+});
+saveLog(loadLog());
 
 let audioCtx = null;
 let phraseBuffer = null;
@@ -176,6 +239,8 @@ async function start() {
       closedSeconds: 2.0,
       onBeep: playBeep,
       onSpeak: playPhrase,
+      onAlarmStart,
+      onAlarmEnd,
     });
 
     await keepScreenOn();

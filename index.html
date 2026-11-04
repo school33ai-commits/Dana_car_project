@@ -22,15 +22,28 @@
     #start { background: #1e7d32; }
     #stop { background: #555; }
     button:disabled { opacity: 0.4; }
+    #driverRow { padding: 0 12px; }
+    #driver { width: 100%; box-sizing: border-box; font-size: 1.1rem; padding: 12px; border-radius: 10px; border: 1px solid #444; background: #222; color: #fff; }
+    #logRow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 0 12px 16px; font-size: 0.9rem; color: #bbb; }
+    #logRow button { flex: 1; font-size: 0.95rem; padding: 10px; background: #333; }
+    #logRow a { color: #8ab4ff; }
   </style>
 </head>
 <body>
   <video id="video" autoplay playsinline muted></video>
   <div id="status" class="calib">Нажмите «Старт»</div>
   <div id="info"></div>
+  <div id="driverRow">
+    <input id="driver" type="text" placeholder="Имя водителя" maxlength="60">
+  </div>
   <div id="controls">
     <button id="start">Старт</button>
     <button id="stop" disabled>Стоп</button>
+  </div>
+  <div id="logRow">
+    <span id="logCount">Записей о засыпании: 0</span>
+    <button id="export">Скачать журнал (CSV)</button>
+    <button id="clear">Очистить</button>
   </div>
   <script type="module" src="app.js"></script>
 </body>

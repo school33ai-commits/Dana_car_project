@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DANA - Журнал засыпаний</title>
+  <style>
+    body { font-family: -apple-system, system-ui, sans-serif; margin: 20px; color: #222; background: #fff; }
+    h1 { font-size: 1.4rem; margin: 0 0 12px; }
+    p.hint { color: #555; font-size: 0.95rem; }
+    input[type=file] { font-size: 1rem; margin: 8px 0 16px; }
+    table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+    th { background: #f0f0f0; }
+    tr:nth-child(even) td { background: #fafafa; }
+    #summary { margin: 12px 0; font-weight: 600; }
+    .error { color: #c00; }
+  </style>
+</head>
+<body>
+  <h1>Журнал засыпаний</h1>
+  <p class="hint">Откройте файл CSV, который скачали с телефона водителя (кнопка «Скачать журнал»). Файл можно переслать через AirDrop или почту.</p>
+  <input id="file" type="file" accept=".csv,text/csv">
+  <div id="summary"></div>
+  <div id="table"></div>
+
+<script>
+// Разбирает строку CSV, где поля в кавычках и кавычки внутри удвоены ("")
+function parseCsvLine(line) {
+  const fields = [];
+  let field = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"' && line[i + 1] === '"') {
+        field += '"';
+        i++;
+      } else if (ch === '"') {
+        inQuotes = false;
+      } else {
+        field += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ",") {
+      fields.push(field);
+      field = "";
+    } else {
+      field += ch;
+    }
+  }
+  fields.push(field);
+  return fields;
+}
+
+function formatTime(iso) {
+  if (!iso) return "—";
+  const date = new Date(iso);
+  return isNaN(date) ? iso : date.toLocaleString("ru-RU");
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+document.getElementById("file").addEventListener("change", async (event) => {
+  const file = event.target.files[0];
+  const summary = document.getElementById("summary");
+  const tableEl = document.getElementById("table");
+  if (!file) return;
+  try {
+    const text = (await file.text()).replace(/^﻿/, "");
+    const lines = text.split(/\r?\n/).filter((line) => line.trim() !== "");
+    const [header, ...rows] = lines.map(parseCsvLine);
+    if (!header || header[0] !== "начало") throw new Error("это не журнал DANA");
+
+    const sorted = rows.slice().sort((a, b) => (a[0] < b[0] ? 1 : -1));
+    summary.textContent = `Засыпаний: ${rows.length}`;
+    tableEl.innerHTML = `
+      <table>
+        <thead>
+          <tr><th>Время засыпания</th><th>Водитель</th><th>Конец</th><th>Глаза закрыты, сек</th><th>EAR</th></tr>
+        </thead>
+        <tbody>
+          ${sorted.map((r) => `
+            <tr>
+              <td>${escapeHtml(formatTime(r[0]))}</td>
+              <td>${escapeHtml(r[2] || "не указан")}</td>
+              <td>${escapeHtml(formatTime(r[1]))}</td>
+              <td>${escapeHtml(r[3] || "—")}</td>
+              <td>${escapeHtml(r[4] || "—")}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>`;
+  } catch (error) {
+    summary.innerHTML = `<span class="error">Не удалось открыть файл: ${escapeHtml(error.message)}</span>`;
+    tableEl.innerHTML = "";
+  }
+});
+</script>
+</body>
+</html>
