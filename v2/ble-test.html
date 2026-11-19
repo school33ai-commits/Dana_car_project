@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>DANA — тест Bluetooth с машинкой</title>
+  <style>
+    body { margin: 0; padding: 12px; background: #111; color: #fff; font-family: -apple-system, system-ui, sans-serif; }
+    h1 { font-size: 1.3rem; margin: 0 0 8px; }
+    p { color: #bbb; font-size: 0.9rem; margin: 6px 0; }
+    #status { display: flex; align-items: center; gap: 8px; font-size: 1.1rem; margin: 10px 0; }
+    .dot { width: 14px; height: 14px; border-radius: 50%; background: #666; }
+    .dot.on { background: #7CFC00; } .dot.connecting { background: #FFD700; } .dot.lost { background: #ff3b30; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 10px 0; }
+    button { font-size: 1.05rem; padding: 14px; border: 0; border-radius: 12px; color: #fff; background: #333; }
+    button:disabled { opacity: 0.4; }
+    #connect { width: 100%; background: #1565c0; }
+    .go { background: #1e7d32; } .brake { background: #c62828; } .stop { background: #555; } .slow { background: #ef6c00; }
+    #log { background: #000; border-radius: 10px; padding: 8px; font: 0.85rem ui-monospace, monospace; height: 30vh; overflow-y: auto; white-space: pre-wrap; }
+    #hint { color: #ffb74d; }
+  </style>
+</head>
+<body>
+  <h1>Тест Bluetooth: телефон → машинка</h1>
+  <p>1) Залейте в ESP32 скетч <b>test_ble</b> (только связь) или <b>dana_car</b> (связь + моторы).<br>
+     2) Откройте Монитор порта в Arduino IDE (115200) — там видно, что пришло.<br>
+     3) Нажмите «Подключить» и выберите <b>DANA-CAR</b>.</p>
+  <p id="hint" hidden></p>
+  <button id="connect">Подключить</button>
+  <div id="status"><span id="dot" class="dot"></span><span id="text">не подключено</span></div>
+
+  <div class="grid">
+    <button class="go" data-cmd="0" disabled>0 — ехать</button>
+    <button class="stop" data-cmd="S" disabled>S — стоять</button>
+    <button class="brake" data-cmd="1" disabled>1 — тревога (тормоз)</button>
+    <button class="brake" data-cmd="5" disabled>5 — тревога макс.</button>
+    <button class="slow" data-cmd="N" disabled>N — лица нет (медленно)</button>
+    <button id="silence" disabled>Тишина 5 с (проверка пульса)</button>
+  </div>
+  <div id="log"></div>
+
+<script type="module">
+import { EspLink } from "./ble.js";
+
+const $ = (id) => document.getElementById(id);
+const logEl = $("log");
+const cmdButtons = [...document.querySelectorAll("button[data-cmd]")];
+
+function log(text) {
+  const time = new Date().toLocaleTimeString("ru-RU");
+  logEl.textContent += `${time}  ${text}\n`;
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+const link = new EspLink({
+  onStatus(kind, text) {
+    $("dot").className = "dot " + kind;
+    $("text").textContent = text.replace(/^ESP32: /, "");
+    $("connect").textContent = kind === "off" ? "Подключить" : "Отключить";
+    const on = kind === "on";
+    cmdButtons.forEach((b) => (b.disabled = !on));
+    $("silence").disabled = !on;
+    log(text);
+  },
+});
+
+// Показываем в журнале каждую реально отправленную команду (и «пульс»)
+const originalWrite = link.write.bind(link);
+link.write = async (code) => {
+  await originalWrite(code);
+  log(`→ отправлено '${code}'`);
+};
+
+if (!EspLink.supported()) {
+  $("hint").hidden = false;
+  $("hint").textContent = "Браузер не умеет Bluetooth. Android/компьютер — Chrome, iPhone — приложение Bluefy.";
+  $("connect").disabled = true;
+}
+
+$("connect").addEventListener("click", async () => {
+  if (link.device && !link.manualDisconnect) {
+    await link.disconnect();
+    return;
+  }
+  try {
+    await link.connect();
+  } catch (error) {
+    link.device = null;
+    $("connect").textContent = "Подключить";
+    log("Ошибка: " + (error.name === "NotFoundError" ? "устройство не выбрано" : error.message));
+  }
+});
+
+cmdButtons.forEach((button) =>
+  button.addEventListener("click", () => link.send(button.dataset.cmd))
+);
+
+// Перестаём слать пульс на 5 с: ESP32 должен сам понять, что связь пропала, и остановиться
+$("silence").addEventListener("click", () => {
+  log("Пульс выключен на 5 с — машинка должна плавно остановиться");
+  const saved = link.flush;
+  link.flush = async () => {};
+  setTimeout(() => {
+    link.flush = saved;
+    log("Пульс снова включён");
+    link.flush();
+  }, 5000);
+});
+</script>
+</body>
+</html>
